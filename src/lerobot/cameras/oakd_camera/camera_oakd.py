@@ -53,124 +53,124 @@ class OakDCamera(Camera):
     def is_connected(self) -> bool:
         return self.device is not None
 
+    # def connect(self, warmup: bool = True) -> None:
+    #     if self.is_connected:
+    #         raise DeviceAlreadyConnectedError(f"{self} is already connected.")
+    #     self.pipeline = self._create_pipeline()
+    #     # self.device = dai.Device(self.pipeline)
+
+    #     if self.serial_number_or_name:
+    #         info = next(
+    #             (d for d in dai.Device.getAllAvailableDevices() if d.getMxId() == self.serial_number_or_name),
+    #             None
+    #         )
+    #         if info is None:
+    #             raise ConnectionError(f"No OAK-D device found with serial {self.serial_number_or_name}.")
+    #         self.device = dai.Device(info)
+    #     else:
+    #         self.device = dai.Device()
+
+    #     self.device.startPipeline(self.pipeline)
+        
+    #     self.q_rgb = self.device.getOutputQueue(self.rgb_stream_name, maxSize=4, blocking=False)
+    #     if self.config.use_depth:
+    #         self.q_depth = self.device.getOutputQueue(self.depth_stream_name, maxSize=4, blocking=False)
+    #     if warmup:
+    #         time.sleep(
+    #             1 )
+    #         start_time = time.time()
+    #         while time.time() - start_time < self.warmup_s:
+    #             self.read()
+    #             time.sleep(0.1)
+    #     logger.info(f"{self} connected.")
+
     def connect(self, warmup: bool = True) -> None:
+        """
+        Connect to the first available OAK-D (or match by MXID if provided)
+        and start the DepthAI pipeline.
+        """
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} is already connected.")
+
+        # Build pipeline
         self.pipeline = self._create_pipeline()
-        # self.device = dai.Device(self.pipeline)
 
-        if self.serial_number_or_name:
-            info = next(
-                (d for d in dai.Device.getAllAvailableDevices() if d.getMxId() == self.serial_number_or_name),
-                None
+        # --- Discover devices ---
+        try:
+            available_devices = dai.Device.getAllAvailableDevices() or []
+        except Exception as e:
+            raise ConnectionError(f"DepthAI failed to enumerate devices: {e}")
+
+        if not available_devices:
+            raise ConnectionError("No OAK-D devices detected on USB.")
+
+        # --- Try to match by MXID or fall back to the first device ---
+        selected_info = None
+        for dev in available_devices:
+            mxid = getattr(dev, "mxid", None)
+            if mxid == self.serial_number_or_name:
+                selected_info = dev
+                break
+
+        if selected_info is None:
+            selected_info = available_devices[0]
+            logger.warning(
+                f"{self}: MXID {self.serial_number_or_name!r} not found — "
+                f"using first available device {selected_info.mxid}"
             )
-            if info is None:
-                raise ConnectionError(f"No OAK-D device found with serial {self.serial_number_or_name}.")
-            self.device = dai.Device(info)
-        else:
-            self.device = dai.Device()
 
+        # --- Create device + start pipeline (DepthAI 3.x API) ---
+        self.device = dai.Device(selected_info)
         self.device.startPipeline(self.pipeline)
-        
+
+        # --- Register output queues ---
+        self.rgb_stream_name = "camRgb"
+        self.depth_stream_name = "stereo.depth"
+
         self.q_rgb = self.device.getOutputQueue(self.rgb_stream_name, maxSize=4, blocking=False)
         if self.config.use_depth:
             self.q_depth = self.device.getOutputQueue(self.depth_stream_name, maxSize=4, blocking=False)
+
+        # --- Warm-up for exposure/gain stabilization ---
         if warmup:
-            time.sleep(
-                1 )
-            start_time = time.time()
-            while time.time() - start_time < self.warmup_s:
-                self.read()
+            logger.info(f"{self}: warming up for {self.warmup_s}s ...")
+            start = time.time()
+            while time.time() - start < self.warmup_s:
+                try:
+                    self.read()
+                except Exception:
+                    pass
                 time.sleep(0.1)
-        logger.info(f"{self} connected.")
 
-    # def connect(self, warmup: bool = True) -> None:
-    #     """
-    #     Connect to the first available OAK-D (or match by MXID if provided)
-    #     and start the DepthAI pipeline.
-    #     """
-    #     if self.is_connected:
-    #         raise DeviceAlreadyConnectedError(f"{self} is already connected.")
-
-    #     # Build pipeline
-    #     self.pipeline = self._create_pipeline()
-
-    #     # --- Discover devices ---
-    #     try:
-    #         available_devices = dai.Device.getAllAvailableDevices() or []
-    #     except Exception as e:
-    #         raise ConnectionError(f"DepthAI failed to enumerate devices: {e}")
-
-    #     if not available_devices:
-    #         raise ConnectionError("No OAK-D devices detected on USB.")
-
-    #     # --- Try to match by MXID or fall back to the first device ---
-    #     selected_info = None
-    #     for dev in available_devices:
-    #         mxid = getattr(dev, "mxid", None)
-    #         if mxid == self.serial_number_or_name:
-    #             selected_info = dev
-    #             break
-
-    #     if selected_info is None:
-    #         selected_info = available_devices[0]
-    #         logger.warning(
-    #             f"{self}: MXID {self.serial_number_or_name!r} not found — "
-    #             f"using first available device {selected_info.mxid}"
-    #         )
-
-    #     # --- Create device + start pipeline (DepthAI 3.x API) ---
-    #     self.device = dai.Device(selected_info)
-    #     self.device.startPipeline(self.pipeline)
-
-    #     # --- Register output queues ---
-    #     self.rgb_stream_name = "camRgb"
-    #     self.depth_stream_name = "stereo.depth"
-
-    #     self.q_rgb = self.device.getOutputQueue(self.rgb_stream_name, maxSize=4, blocking=False)
-    #     if self.config.use_depth:
-    #         self.q_depth = self.device.getOutputQueue(self.depth_stream_name, maxSize=4, blocking=False)
-
-    #     # --- Warm-up for exposure/gain stabilization ---
-    #     if warmup:
-    #         logger.info(f"{self}: warming up for {self.warmup_s}s ...")
-    #         start = time.time()
-    #         while time.time() - start < self.warmup_s:
-    #             try:
-    #                 self.read()
-    #             except Exception:
-    #                 pass
-    #             time.sleep(0.1)
-
-    #     # --- Success ---
-    #     conn = self.device.getDeviceConnection()
-    #     logger.info(f"{self} connected via {conn.toString() if conn else 'USB link'}")
+        # --- Success ---
+        conn = self.device.getDeviceConnection()
+        logger.info(f"{self} connected via {conn.toString() if conn else 'USB link'}")
 
 
-    #     # 🔹 Create the device handle and start the pipeline
-    #     self.device = dai.Device(selected_device_info)
-    #     self.device.startPipeline(self.pipeline)
+        # 🔹 Create the device handle and start the pipeline
+        self.device = dai.Device(selected_device_info)
+        self.device.startPipeline(self.pipeline)
 
-    #     # 🔹 Set stream names
-    #     self.rgb_stream_name = "camRgb"
-    #     self.depth_stream_name = "stereo.depth"
+        # 🔹 Set stream names
+        self.rgb_stream_name = "camRgb"
+        self.depth_stream_name = "stereo.depth"
 
-    #     self.q_rgb = self.device.getOutputQueue(self.rgb_stream_name, maxSize=4, blocking=False)
-    #     if self.config.use_depth:
-    #         self.q_depth = self.device.getOutputQueue(self.depth_stream_name, maxSize=4, blocking=False)
+        self.q_rgb = self.device.getOutputQueue(self.rgb_stream_name, maxSize=4, blocking=False)
+        if self.config.use_depth:
+            self.q_depth = self.device.getOutputQueue(self.depth_stream_name, maxSize=4, blocking=False)
 
-    #     # 🔹 Optional warm-up loop
-    #     if warmup:
-    #         logger.info(f"{self}: warming up for {self.warmup_s}s …")
-    #         start = time.time()
-    #         while time.time() - start < self.warmup_s:
-    #             try:
-    #                 self.read()
-    #             except Exception:
-    #                 pass
-    #             time.sleep(0.1)
+        # 🔹 Optional warm-up loop
+        if warmup:
+            logger.info(f"{self}: warming up for {self.warmup_s}s …")
+            start = time.time()
+            while time.time() - start < self.warmup_s:
+                try:
+                    self.read()
+                except Exception:
+                    pass
+                time.sleep(0.1)
 
-    #     logger.info(f"{self} connected via {self.device.getDeviceConnection().toString()}")
+        logger.info(f"{self} connected via {self.device.getDeviceConnection().toString()}")
 
 
 
@@ -229,43 +229,43 @@ class OakDCamera(Camera):
             - usb_speed: USB connection type
             - state: connection availability
         """
-        # found_devices_info = []
-        # try:
-        #     devices_info = dai.Device.getAllAvailableDevices()
-        # except Exception as e:
-        #     logger.error(f"DepthAI device discovery failed: {e}")
-        #     return found_devices_info
-        # for dev_info in devices_info:
-        #     try:
-        #         # Handle attribute differences across DepthAI versions
-        #         mxid = getattr(dev_info, "mxid", None) or getattr(dev_info, "getMxId", lambda: "Unknown")()
-        #         desc = getattr(dev_info, "desc", None)
-        #         if hasattr(desc, "name"):
-        #             desc_str = desc.name
-        #         elif isinstance(desc, str):
-        #             desc_str = desc
-        #         else:
-        #             desc_str = "OAK-D Device"
+        found_devices_info = []
+        try:
+            devices_info = dai.Device.getAllAvailableDevices()
+        except Exception as e:
+            logger.error(f"DepthAI device discovery failed: {e}")
+            return found_devices_info
+        for dev_info in devices_info:
+            try:
+                # Handle attribute differences across DepthAI versions
+                mxid = getattr(dev_info, "mxid", None) or getattr(dev_info, "getMxId", lambda: "Unknown")()
+                desc = getattr(dev_info, "desc", None)
+                if hasattr(desc, "name"):
+                    desc_str = desc.name
+                elif isinstance(desc, str):
+                    desc_str = desc
+                else:
+                    desc_str = "OAK-D Device"
 
-        #         state = (
-        #             "AVAILABLE"
-        #             if dev_info.state == dai.XLinkDeviceState.X_LINK_UNBOOTED
-        #             else "IN_USE"
-        #         )
+                state = (
+                    "AVAILABLE"
+                    if dev_info.state == dai.XLinkDeviceState.X_LINK_UNBOOTED
+                    else "IN_USE"
+                )
 
-        #         found_devices_info.append(
-        #             {
-        #                 "id": mxid if mxid else "Unknown",
-        #                 "name": desc_str,
-        #                 "type": "OakDCamera",  # 👈 must match main script
-        #                 "state": state,
-        #             }
-        #         )
+                found_devices_info.append(
+                    {
+                        "id": mxid if mxid else "Unknown",
+                        "name": desc_str,
+                        "type": "OakDCamera",  # 👈 must match main script
+                        "state": state,
+                    }
+                )
 
-        #     except Exception as e:
-        #         logger.warning(f"Failed to query DepthAI device info: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to query DepthAI device info: {e}")
 
-        # return found_devices_info
+        return found_devices_info
     
     def read_depth(self, timeout_ms: int = 200) -> NDArray[Any]:
         """Reads one depth frame from the OAK-D (if enabled)."""
