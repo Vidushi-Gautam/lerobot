@@ -42,6 +42,11 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
             from .reachy2_camera.reachy2_camera import Reachy2Camera
 
             cameras[key] = Reachy2Camera(cfg)
+        elif cfg.type == "oakd_camera":
+            from .oakd_camera.camera_oakd import OakDCamera
+
+            cameras[key] = OakDCamera(cfg)
+        
 
         else:
             try:
